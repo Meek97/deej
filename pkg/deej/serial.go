@@ -29,10 +29,14 @@ type SerialIO struct {
 	connOptions serial.OpenOptions
 	conn        io.ReadWriteCloser
 
-	lastKnownNumSliders        int
-	currentSliderPercentValues []float32
+	lastKnownNumSliders int
+	lastKnownNumButtons int
 
-	sliderMoveConsumers []chan SliderMoveEvent
+	currentSliderPercentValues []float32
+	currentButtonValues        []bool
+
+	sliderMoveConsumers  []chan SliderMoveEvent
+	buttonPressConsumers []chan ButtonPressEvent
 }
 
 // SliderMoveEvent represents a single slider move captured by deej
@@ -40,8 +44,12 @@ type SliderMoveEvent struct {
 	SliderID     int
 	PercentValue float32
 }
+type ButtonPressEvent struct {
+	ButtonID int
+}
 
-var expectedLinePattern = regexp.MustCompile(`^\d{1,4}(\|\d{1,4})*\r\n$`)
+// TODO: make serial regEx configurable for users with no buttons
+var expectedLinePattern = regexp.MustCompile(`^\d{1}(\|\d{1})*\&\d{1,4}(\|\d{1,4})*\r\n$`)
 
 // NewSerialIO creates a SerialIO instance that uses the provided deej
 // instance's connection info to establish communications with the arduino chip
@@ -146,6 +154,15 @@ func (sio *SerialIO) SubscribeToSliderMoveEvents() chan SliderMoveEvent {
 	return ch
 }
 
+// SubscribeToButtonPressEvents returns an unbuffered channel that receives
+// a buttonPressConsumer struct every time a button is pressed
+func (sio *SerialIO) SubscribeToButtonPressEvents() chan ButtonPressEvent {
+	ch := make(chan ButtonPressEvent)
+	sio.buttonPressConsumers = append(sio.buttonPressConsumers, ch)
+
+	return ch
+}
+
 func (sio *SerialIO) setupOnConfigReload() {
 	configReloadedChannel := sio.deej.config.SubscribeToChanges()
 
@@ -234,13 +251,45 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 	if !expectedLinePattern.MatchString(line) {
 		return
 	}
-
 	// trim the suffix
 	line = strings.TrimSuffix(line, "\r\n")
-
 	// split on pipe (|), this gives a slice of numerical strings between "0" and "1023"
-	splitLine := strings.Split(line, "|")
-	numSliders := len(splitLine)
+	splitLine := strings.Split(line, "&")
+	buttonLine := strings.Split(splitLine[0], "|")
+	sliderLine := strings.Split(splitLine[1], "|")
+
+	numSliders := len(sliderLine)
+	numButtons := len(buttonLine)
+
+	// update our slider count, if needed - this will send slider move events for all
+	if numButtons != sio.lastKnownNumButtons {
+		logger.Infow("Detected buttons", "amount", numButtons)
+		sio.lastKnownNumButtons = numButtons
+		sio.currentButtonValues = make([]bool, numButtons)
+
+		//set all buttons to false for default values
+		for idx := range sio.currentButtonValues {
+			sio.currentButtonValues[idx] = false
+		}
+	}
+	//for each button
+	buttonEvents := []ButtonPressEvent{}
+	for buttonIDx, stringValue := range buttonLine {
+		//Convert string values to integers
+		number, _ := strconv.Atoi(stringValue)
+
+		pressed := number != 0
+
+		//if button was pressed
+		if pressed == true {
+			sio.currentButtonValues[buttonIDx] = pressed
+			sio.logger.Debug("a button was pressed! ", buttonIDx)
+			buttonEvents = append(buttonEvents, ButtonPressEvent{
+				ButtonID: buttonIDx,
+			})
+		}
+
+	}
 
 	// update our slider count, if needed - this will send slider move events for all
 	if numSliders != sio.lastKnownNumSliders {
@@ -256,7 +305,7 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 
 	// for each slider:
 	moveEvents := []SliderMoveEvent{}
-	for sliderIdx, stringValue := range splitLine {
+	for sliderIdx, stringValue := range sliderLine {
 
 		// convert string values to integers ("1023" -> 1023)
 		number, _ := strconv.Atoi(stringValue)
@@ -268,6 +317,7 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 			return
 		}
 
+		//TODO: update math to use 3.3v potentiometer numbers
 		// map the value from raw to a "dirty" float between 0 and 1 (e.g. 0.15451...)
 		dirtyFloat := float32(number) / 1023.0
 
@@ -295,12 +345,18 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 			}
 		}
 	}
-
 	// deliver move events if there are any, towards all potential consumers
 	if len(moveEvents) > 0 {
 		for _, consumer := range sio.sliderMoveConsumers {
 			for _, moveEvent := range moveEvents {
 				consumer <- moveEvent
+			}
+		}
+	}
+	if len(buttonEvents) > 0 {
+		for _, consumer := range sio.buttonPressConsumers {
+			for _, pressEvent := range buttonEvents {
+				consumer <- pressEvent
 			}
 		}
 	}

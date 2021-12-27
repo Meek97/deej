@@ -195,6 +195,13 @@ func (s *masterSession) SetVolume(v float32) error {
 	return nil
 }
 
+func (s *masterSession) GetMute() bool {
+	return false
+}
+func (s *masterSession) SetMute(m bool) error {
+	return nil
+}
+
 func (s *masterSession) Release() {
 	s.logger.Debug("Releasing audio session")
 }

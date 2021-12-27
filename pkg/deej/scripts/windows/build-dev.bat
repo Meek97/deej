@@ -1,4 +1,4 @@
-@ECHO OFF
+bat@ECHO OFF
 
 ECHO Building deej (development)...
 

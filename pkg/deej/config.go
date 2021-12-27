@@ -17,6 +17,7 @@ import (
 // as well as loading/file watching logic for deej's configuration file
 type CanonicalConfig struct {
 	SliderMapping *sliderMap
+	ButtonMapping *buttonMap
 
 	ConnectionInfo struct {
 		COMPort  string
@@ -50,6 +51,7 @@ const (
 
 	configKeySliderMapping       = "slider_mapping"
 	configKeyInvertSliders       = "invert_sliders"
+	configKeyButtonMapping       = "button_mapping"
 	configKeyCOMPort             = "com_port"
 	configKeyBaudRate            = "baud_rate"
 	configKeyNoiseReductionLevel = "noise_reduction"
@@ -145,6 +147,7 @@ func (cc *CanonicalConfig) Load() error {
 	cc.logger.Info("Loaded config successfully")
 	cc.logger.Infow("Config values",
 		"sliderMapping", cc.SliderMapping,
+		"buttonMapping", cc.ButtonMapping,
 		"connectionInfo", cc.ConnectionInfo,
 		"invertSliders", cc.InvertSliders)
 
@@ -223,6 +226,11 @@ func (cc *CanonicalConfig) populateFromVipers() error {
 		cc.internalConfig.GetStringMapStringSlice(configKeySliderMapping),
 	)
 
+	// merge the button mappings from the user and internal configs
+	cc.ButtonMapping = buttonMapFromConfigs(
+		cc.userConfig.GetStringMapStringSlice(configKeyButtonMapping),
+		cc.internalConfig.GetStringMapStringSlice(configKeyButtonMapping),
+	)
 	// get the rest of the config fields - viper saves us a lot of effort here
 	cc.ConnectionInfo.COMPort = cc.userConfig.GetString(configKeyCOMPort)
 
